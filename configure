@@ -11,7 +11,7 @@ sudo yum update -y
 
 # 4. Create Server User
 sudo adduser -m ${SERVER_USER}
-echo ${SERVER_USER} | sudo passwd ${SERVER_USER} --stdin
+echo ${SERVER_USER} | sudo passwd ${SERVER_USER} --stdin # Leaks password, should be changed to a more secure one
 
 # 5. Arrange for Server User to log in
 sudo bash -c "cat >>/etc/ssh/sshd_config" <<EOF
