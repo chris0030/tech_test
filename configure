@@ -60,8 +60,6 @@ rm amazon-corretto-11.0.9.12.1-linux-x64.tar.gz
 sudo sh -c  "echo \"export PATH=\"/opt/jdk/bin:$PATH\"\" >> /home/${SERVER_USER}/.bashrc"
 sudo sh -c  "echo \"export JAVA_HOME=/opt/jdk\" >> /home/${SERVER_USER}/.bashrc"
 
-
-
 # 3. Download and install Tomcat
 sudo curl ftp.heanet.ie/mirrors/www.apache.org/dist/tomcat/tomcat-9/v9.0.70/bin/apache-tomcat-9.0.70.tar.gz \
     -o /home/${SERVER_USER}/apache-tomcat-9.0.70.tar.gz
