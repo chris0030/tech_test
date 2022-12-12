@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+#
+# Run this script as CentOS user with Sudo privileges
+# Required Environment variables
+# 
+# SERVER_USER (the unprivileged user)
+# REMOTE_USERNAME (privileged SSH access user)
+
+# 2. Update server then restart (already done)
+sudo yum update -y
+
+# 4. Create Server User
+sudo adduser -m ${SERVER_USER}
+echo ${SERVER_USER} | sudo passwd ${SERVER_USER} --stdin
+
+# 5. Arrange for Server User to log in
+sudo bash -c "cat >>/etc/ssh/sshd_config" <<EOF
+Match ${SERVER_USER}
+  PasswordAuthentication no
+EOF
+
+# This step is only done to give access for the test
+# Not suitable for production/public servers due to shared keys
+sudo -u ${SERVER_USER} mkdir -p -m=0700 "/home/${SERVER_USER}/.ssh"
+sudo install -m 0600 -o ${SERVER_USER} -g ${SERVER_USER} /home/${REMOTE_USERNAME}/.ssh/authorized_keys /home/${SERVER_USER}/.ssh/
+
+# 6. Change Server User Prompt, prompt borrowed from StackOverflow
+sudo -u ${SERVER_USER} bash -c "cat >> ~/.bashrc" <<EOF
+if [ "`id -u`" -eq 0 ]; then
+    PS1="\[\033[m\]|\[\033[1;35m\]\t\[\033[m\]|\[\e[1;31m\]\u\[\e[1;36m\]\[\033[m\]@\[\e[1;36m\]\h\[\033[m\]:\[\e[0m\]\[\e[1;32m\][\W]> \[\e[0m\]"
+else
+    PS1="\[\033[m\]|\[\033[1;35m\]\t\[\033[m\]|\[\e[1m\]\u\[\e[1;36m\]\[\033[m\]@\[\e[1;36m\]\h\[\033[m\]:\[\e[0m\]\[\e[1;32m\][\W]> \[\e[0m\]"
+fi
+EOF
+
+# 7. Configure MOTD for all users
+sudo sh -c "echo '#######################################' > /etc/motd"
+sudo sh -c "echo '# WARNING! This is a test system only #' >> /etc/motd"
+sudo sh -c "echo '#######################################' >> /etc/motd"
+
+# 8. Enable Server User to use reboot
+sudo sh -c  "echo \"${SERVER_USER} ALL=/usr/sbin/reboot\" > /etc/sudoers.d/${SERVER_USER}"
+
+# 9. Create memory hog script
+sudo sh -c "echo \"ps -eo fname,pid,%mem --sort %mem | tail -n 10\" > /home/${SERVER_USER}/memory_hogs.sh"
+sudo chmod +x /home/${SERVER_USER}/memory_hogs.sh
+sudo chown ${SERVER_USER}:${SERVER_USER} /home/${SERVER_USER}/memory_hogs.sh
+sudo -u ${SERVER_USER} /home/${SERVER_USER}/memory_hogs.sh
+
+# Objective 2 - Java
+
+# 1. Download Java
+sudo mkdir /opt/jdk
+curl -LO https://corretto.aws/downloads/resources/11.0.9.12.1/amazon-corretto-11.0.9.12.1-linux-x64.tar.gz
+sudo tar -xf amazon-corretto-11.0.9.12.1-linux-x64.tar.gz -C /opt/jdk --strip-components 1
+rm amazon-corretto-11.0.9.12.1-linux-x64.tar.gz
+
+# 2. Configure Server User to use this version of Java
+# Can be tested by switching to SERVER_USER and running `java --version`
+sudo sh -c  "echo \"export PATH=\"/opt/jdk/bin:$PATH\"\" >> /home/${SERVER_USER}/.bashrc"
+sudo sh -c  "echo \"export JAVA_HOME=/opt/jdk\" >> /home/${SERVER_USER}/.bashrc"
+
+
+
+# 3. Download and install Tomcat
+sudo curl ftp.heanet.ie/mirrors/www.apache.org/dist/tomcat/tomcat-9/v9.0.70/bin/apache-tomcat-9.0.70.tar.gz \
+    -o /home/${SERVER_USER}/apache-tomcat-9.0.70.tar.gz
+
+sudo mkdir /home/${SERVER_USER}/tomcat
+sudo tar -xf /home/${SERVER_USER}/apache-tomcat-9.0.70.tar.gz \
+    -C /home/${SERVER_USER}/tomcat --strip-components 1
+sudo rm /home/${SERVER_USER}/apache-tomcat-9.0.70.tar.gz
+sudo chown $SERVER_USER:$SERVER_USER -R /home/${SERVER_USER}/tomcat
+
+# 4. Setup Tomcat as service 
+sudo bash -c "cat >/etc/systemd/system/tomcat.service" <<EOF
+[Unit]
+Description=Tomcat
+After=network.target
+
+[Service]
+Type=forking
+
+User=${SERVER_USER}
+Group=${SERVER_USER}
+
+Environment="JAVA_HOME=/opt/jdk"
+Environment="JAVA_OPTS=-Djava.security.egd=file:///dev/urandom"
+Environment="CATALINA_BASE=/home/${SERVER_USER}/tomcat"
+Environment="CATALINA_HOME=/home/${SERVER_USER}/tomcat"
+Environment="CATALINA_PID=/home/${SERVER_USER}/tomcat/temp/tomcat.pid"
+Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+
+ExecStart=/home/${SERVER_USER}/tomcat/bin/startup.sh
+ExecStop=/home/${SERVER_USER}/tomcat/bin/shutdown.sh
+
+RestartSec=10
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl start tomcat
+
+# Objective 3 - Web
+
+# 1. Install NGINX
+sudo yum install -y epel-release
+sudo yum install -y nginx
+sudo systemctl start nginx
+
+# 2. Create Self-signed Certs
+sudo mkdir /etc/ssl/private
+sudo openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
+    -subj "/C=GB/ST=Mind/L=Remote/O=Organized/CN=${REMOTE_IP}" \
+    -keyout /etc/ssl/private/${REMOTE_IP}.key  -out /etc/ssl/certs/${REMOTE_IP}.crt
+sudo openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+
+# 3. Install in webserver
+sudo mkdir /etc/nginx/snippets
+sudo sh -c "echo \"ssl_certificate /etc/ssl/certs/${REMOTE_IP}.crt;\" > /etc/nginx/snippets/self-signed.conf"
+sudo sh -c "echo \"ssl_certificate_key /etc/ssl/private/${REMOTE_IP}.key;\" >> /etc/nginx/snippets/self-signed.conf"
+
+sudo bash -c "cat > /etc/nginx/snippets/ssl-params.conf" <<EOF
+# from https://cipherli.st/
+# and https://raymii.org/s/tutorials/Strong_SSL_Security_On_nginx.html
+
+ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+ssl_prefer_server_ciphers on;
+ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
+ssl_ecdh_curve secp384r1;
+ssl_session_cache shared:SSL:10m;
+ssl_session_tickets off;
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;
+# Disable preloading HSTS for now.  You can use the commented out header line that includes
+# the "preload" directive if you understand the implications.
+#add_header Strict-Transport-Security "max-age=63072000; includeSubdomains; preload";
+add_header Strict-Transport-Security "max-age=63072000; includeSubdomains";
+add_header X-Frame-Options DENY;
+add_header X-Content-Type-Options nosniff;
+
+ssl_dhparam /etc/ssl/certs/dhparam.pem;
+EOF
+
+# Step 4 - Edit homepage
+sudo bash -c "echo '<h1>Do not panic, this is just a test</h1>' > /usr/share/nginx/html/index.html"
+
+# Step 5, 6, 7
+sudo yum install -y httpd-tools
+echo "$SERVER_USER" | sudo htpasswd -i -c /etc/nginx/.htpasswd ${SERVER_USER}
+
+# This step is being done as SELinux was blocking the NGINX
+# redirect from 80/443 to 8080
+# May need more research to understand ramifications
+sudo yum install -y policycoreutils-python
+sudo semanage permissive -a httpd_t 
+
+sudo bash -c "cat > /etc/nginx/conf.d/${REMOTE_IP}.conf" <<EOF
+upstream tomcat {
+    server 127.0.0.1:8080 fail_timeout=0;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+
+    server_name ${REMOTE_IP};
+    include snippets/self-signed.conf;
+    include snippets/ssl-params.conf;
+
+
+    location / {
+        auth_basic "Administration Area";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass  http://tomcat/;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+sudo systemctl restart nginx
+
+# 8. Configure firewall
+sudo yum install -y firewalld
+sudo systemctl enable firewalld
+sudo systemctl start firewalld
+
+sudo firewall-cmd --zone=public --add-service=https --permanent
+sudo firewall-cmd --zone=public --add-service=http --permanent
+sudo firewall-cmd --zone=public --remove-port=8080/tcp --permanent
+sudo firewall-cmd --reload 
+
+# Objective 4
+
+# 1. Install Postgres
+sudo yum install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+sudo yum install -y postgresql13-server
+sudo /usr/pgsql-13/bin/postgresql-13-setup initdb
+
+# 2. Configure to listen on TCP/IP
+sudo sed -i 's/#listen_addresses/listen_addresses/g' /var/lib/pgsql/13/data/postgresql.conf
+sudo systemctl enable postgresql-13
+sudo systemctl start postgresql-13
+
+# 3. Create DB, user, and table
+sudo runuser -l postgres -c "createuser ${SERVER_USER}"
+sudo runuser -l postgres -c "createdb ${DB_NAME}"
+sudo runuser -l postgres -c "psql -d ${DB_NAME} -c \"GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${SERVER_USER}\""
+
+sudo bash -c "cat > /tmp/create-table.sql" <<EOF
+CREATE TABLE bubbles (
+	bubble_id serial PRIMARY KEY,
+	name VARCHAR ( 50 ) NOT NULL,
+	email VARCHAR ( 255 ) UNIQUE NOT NULL,
+	created_on TIMESTAMP DEFAULT now() NOT NULL
+);
+EOF
+
+sudo runuser -l postgres -c "psql -d ${DB_NAME} -a -f /tmp/create-table.sql"
+sudo runuser -l postgres -c "psql -d ${DB_NAME} -c  \"GRANT ALL PRIVILEGES ON bubbles TO ${SERVER_USER}\""
+
+# 4. Create and insert data
+sudo bash -c "cat > /tmp/insert-data.sql" <<EOF
+INSERT INTO 
+    bubbles (name, email)
+VALUES
+    ('Chris','chris@example.com'),
+    ('Alice', 'alice@example.com'),
+    ('Bob', 'bob@geocities.com');
+EOF
+
+sudo runuser -l postgres -c "psql -d ${DB_NAME} -a -f /tmp/insert-data.sql"
+
+# Create shell script to return values
+echo "psql -d ${DB_NAME} -c 'SELECT * FROM bubbles'" > return_all_data_bubbles.sh
+chmod +x return_all_data_bubbles.sh
+sudo chown $SERVER_USER:$SERVER_USER return_all_data_bubbles.sh
+sudo mv return_all_data_bubbles.sh /home/${SERVER_USER}/return_all_data_bubbles.sh
+sudo runuser -l ${SERVER_USER} -c "/home/${SERVER_USER}/return_all_data_bubbles.sh"
+
+# Copy notes over to server user
