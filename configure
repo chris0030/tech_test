@@ -202,6 +202,7 @@ sudo systemctl start firewalld
 sudo firewall-cmd --zone=public --add-service=https --permanent
 sudo firewall-cmd --zone=public --add-service=http --permanent
 sudo firewall-cmd --zone=public --remove-port=8080/tcp --permanent
+sudo firewall-cmd --zone=public --add-service=ssh --permanent
 sudo firewall-cmd --reload 
 
 # Objective 4
@@ -253,3 +254,6 @@ sudo mv return_all_data_bubbles.sh /home/${SERVER_USER}/return_all_data_bubbles.
 sudo runuser -l ${SERVER_USER} -c "/home/${SERVER_USER}/return_all_data_bubbles.sh"
 
 # Copy notes over to server user
+curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/hardening.md
+curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/backup.md
+curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/reliability.md
