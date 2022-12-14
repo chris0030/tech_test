@@ -250,8 +250,3 @@ chmod +x return_all_data_bubbles.sh
 sudo chown $SERVER_USER:$SERVER_USER return_all_data_bubbles.sh
 sudo mv return_all_data_bubbles.sh /home/${SERVER_USER}/return_all_data_bubbles.sh
 sudo runuser -l ${SERVER_USER} -c "/home/${SERVER_USER}/return_all_data_bubbles.sh"
-
-# Copy notes over to server user
-curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/hardening.md
-curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/backup.md
-curl -O https://raw.githubusercontent.com/chris0030/tech_test/main/reliability.md
